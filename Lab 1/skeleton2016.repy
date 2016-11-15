@@ -1,0 +1,324 @@
+# FEEL FREE TO CHANGE THE CODE. 
+# This is just a dull example
+
+# ------------------------------------------------------------------------------   
+# Start listening and handle incoming connections in board() function
+# ------------------------------------------------------------------------------   
+def start_board():
+  ip = mycontext['ip']
+  port = mycontext['port']
+
+  print "In start_board " + str(isinstance( ip, ( int, long ) )) #False
+  print "In start_board " + str(isinstance( port, ( int, long ) )) #False
+
+  print "Listening on IP " + str(ip) +" port " + str(port)
+  try: 
+    print "Men tjenare! :D"
+    listencommhandle = waitforconn(ip, port, board_connection_handler)
+  except Exception, e:
+    print "Exception in start_board: %s, %s\n" %(type(e), e)
+    raise
+    #pass
+
+# ------------------------------------------------------------------------------    
+# Called when an incoming message is received. 
+# --> Important starting point
+# ------------------------------------------------------------------------------    
+def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle):
+  print "In board_connection_handler"
+  try:
+    msgheader = sockobj.recv(1024) # Receive message
+    
+    print '****Request:\n%s' % msgheader
+    # React depending on message type: HTTP GET or POST, or some other type of communication.
+    if msgheader.startswith( 'GET' ):
+      get_board_handler(msgheader, sockobj, thiscommhandle)
+    elif msgheader.startswith( 'POST' ):
+      print "A POST it was"
+      other_requests_handler(msgheader, sockobj, thiscommhandle)
+    else:
+      print "Receiving from neighbour"
+      recv_from_neighbour(msgheader, thiscommhandle)
+
+  except Exception, e:
+    print "Exception in board: %s, %s\n" %(type(e), e)
+    #raise
+
+# ------------------------------------------------------------------------------
+# Handles initial GET request from browser, outputs HTML string and closes socket.
+# ------------------------------------------------------------------------------
+def get_board_handler(msgheader, sockobj, thiscommhandle):
+  htmlresponse = generate_html_page()
+  res=make_http_response(200, 'OK', htmlresponse)
+  sockobj.send(res)
+  stopcomm(thiscommhandle) 
+
+# ------------------------------------------------------------------------------
+# Handles initial GET request from browser, outputs HTML string and closes socket.
+# ------------------------------------------------------------------------------
+def other_requests_handler(msgheader, sockobj, thiscommhandle):
+  # extract the query from the HTTP request  
+
+  query = extract_http_request_contents(msgheader)
+  print query
+  # extract the query parameters
+  parameters = extract_parameters_from_query(query)
+  print parameters
+  print parameters['entry']
+
+
+  print "Plx work…"
+###My code
+#If true, the button "Submit to board" was pressed, and we should add a new entry
+  if parameters.get('delete') == None:
+    print "No "'delete'" entry exists"
+    mycontext['entries'][mycontext['lastId']] = parameters['entry']
+
+    send_to_neighbour(mycontext['lastId'], parameters['entry'], 'add')
+
+    mycontext['lastId'] += 1
+
+    #generate_html_page() <-- Should I have this?
+  else: #Else we should either remove or modify an entry
+
+    idToChange = int(parameters['id'])
+
+    if parameters['delete'] == "0":
+      #print "Hey, I wanna modefiy something! :D"
+      mycontext['entries'][idToChange] = parameters['entry']
+
+      send_to_neighbour(idToChange, parameters['entry'], 'modify')
+
+    elif parameters['delete'] == "1":
+      #print "Time to delete some stuffs! XD"
+      try:
+        hej = mycontext['entries'].pop(idToChange) #Save the entry in case we need it in the future
+        send_to_neighbour(idToChange, parameters['entry'], 'delete')
+      except Exception, e:
+        print "Failed to remove entry, nothing should happen"
+    else:
+      print "Oh, dat wasn't very smart… ;)" + str(parameters['delete'])
+      print "The value for 'delete' is not defined"
+### end My code
+
+  
+  # Do not mix HTML code with the server code as done here. This is a bad practice
+  template='<html><head><style>.status {color: red;font-size: 75%%;}</style></head><body><pre><samp class="status">%s</samp></pre></body><html>'
+  htmlresponse = template % ("404 Not Found\n" + msgheader)
+  res=make_http_response(404, 'Not Found', htmlresponse)
+  sockobj.send(res)
+  stopcomm(thiscommhandle) 
+
+# ------------------------------------------------------------------------------
+# Wrap into HTTP headers
+# ------------------------------------------------------------------------------
+def make_http_response(status, status_text, htmlresponse):
+
+    response_template = "HTTP/1.1 %d %s\r\nContent-type: text/html\r\nContent-length: %i\r\n\r\n%s"
+    return response_template % (status, status_text, len(htmlresponse), htmlresponse)
+
+# ------------------------------------------------------------------------------
+# Utility function to extract the contents (payload) from HTTP request
+# ------------------------------------------------------------------------------
+def extract_http_request_contents(header):
+  # find content length
+  conent_length = header.split('Content-Length: ')[1]
+  conent_length = int(conent_length.split('\r\n')[0])
+  
+  # extract the http response body and discard the header
+  contetns = header[-conent_length:]
+  return contetns
+
+# ------------------------------------------------------------------------------
+# Utility function to extract query parameter from HTML query
+# ------------------------------------------------------------------------------
+def extract_parameters_from_query(msg):
+  # extract the query parameters as a dictionary: {name:value}
+  # example input format: comment=aa&ip=127.0.0.1&port=63101&action=Delete
+  parameters={}
+  arr = msg.split('&')
+  for a in arr:
+    pp = a.split('=')
+    if len(pp)>1:
+      parameters[pp[0]] = pp[1]
+  return parameters
+
+# ------------------------------------------------------------------------------
+# Outputs the blackboard html 
+# ------------------------------------------------------------------------------   
+def generate_html_page():
+  #Initialize blackboard content
+  entries = ""
+
+  entriesToLoop = mycontext['entries']
+  for val in entriesToLoop:
+
+    newEntry = mycontext['entry_template'] %(val, val, entriesToLoop[val])
+    entries += newEntry
+
+
+  # dynamic title showing Ip address, port and up time. 
+  title='Sample board @ %s:%d. Up time: %d' %( str(mycontext['ip']), mycontext['port'], int(getruntime()) )
+  content = mycontext['boardcontents_template'] %( title, entries )
+  fullpage_h = mycontext['frontpage_header_template'] + content
+  fullpage = fullpage_h + mycontext['frontpage_footer_template'] % mycontext['authors']
+  #print entries, content, fullpage
+  return fullpage
+# ------------------------------------------------------------------------------    
+# Separates the IP address and the port number for a given neighbour
+# ------------------------------------------------------------------------------  
+def split_neighbour(neighbour):
+  n = neighbour.split(":")
+  n[1] = int(n[1])
+  return tuple(n)
+
+# ------------------------------------------------------------------------------    
+# Removes me for the list of neighbours
+# ------------------------------------------------------------------------------  
+def remove_my_address(neighbour_tuple):
+    if (neighbour_tuple[0] == mycontext['ip']) and (neighbour_tuple[1] == mycontext['port']):
+      return
+    return neighbour_tuple
+
+# ------------------------------------------------------------------------------
+# Sends HTTP to every neighbour
+# ------------------------------------------------------------------------------
+def send_to_neighbour(entry_id, entry_message, action):
+  print "neighbours: " + str(mycontext['neighbours'])
+  for (ip, port) in mycontext['neighbours']:
+
+    
+    #sock = openconn(neighbour[0], 80)
+    #sock = openconn(neighbour[0], 63163)
+    #print "hej: " + str(neighbour[0]) + '  '  + str(neighbour[1])
+
+    try:
+      #print "sockan lilla sockan: " + str(ip) + ' ' + str(port)
+      #print "my IP: " + str(mycontext['port']) + ' ' +  str(mycontext['ip'])
+
+      sock = openconn(ip, port)
+      sock.send("%d|%s|%s" % (int(entry_id), entry_message, action))
+    except Exception, e:
+      print "Failed to send to neighbour"
+    else:
+      sock.close()
+
+# ------------------------------------------------------------------------------
+# Receive for neighbour
+# ------------------------------------------------------------------------------
+def recv_from_neighbour(msgheader, thiscommhandle):
+  print "In recv_from_neighbour"
+  [message_id, message, action] = msgheader.split("|")
+
+  print "I received something! :D"
+  print "id: " + str(message_id)
+  print "message: " + message
+  print "action: " + action
+
+  if action == 'add':
+    print "Adding new entry"
+
+    #print "Is int: " + str(isinstance( action, ( int, long ) ))
+    #print "Is int: " + str(isinstance( message_id, ( int, long ) )) #False
+    #print "Is int: " + str(isinstance( message, ( int, long ) ))  #False
+    #print "Is int: " + str(isinstance( mycontext['entries'][int(message_id) - 1], ( int, long ) ))  #False
+    #print "Is int: " + str(isinstance( mycontext['lastId'], ( int, long ) )) #True
+    
+    print "mycontext['entries']: " + str(mycontext['entries'])
+
+    #mycontext['entries'][message_id] = message
+    mycontext['entries'][int(message_id)] = message
+
+    print "Mu?"
+
+    if mycontext['lastId'] < int(message_id):
+      mycontext['lastId'] = int(message_id) + 1
+
+    print "mycontext['entries']: " + str(mycontext['entries'])
+
+    print "Lunch time? :D"
+
+  elif action == 'delete':
+    print action
+    mycontext['entries'].pop(int(message_id))
+  else: #Modify
+    print "else action: " + action
+    mycontext['entries'][int(message_id)] = message
+    print mycontext['entries']
+  print "After lunch"
+
+  #print "msgheader: " + str(msgheader)
+
+  stopcomm(thiscommhandle)
+
+# ------------------------------------------------------------------------------    
+# Main entry point of the program. Initalizes global variables in mycontext
+# and calls start_board() which opens a socket for incoming connections.
+# ------------------------------------------------------------------------------
+if callfunc == 'initialize':
+  # whenever this vessel gets a connection on its IP:port it'll call function board_connection_handler
+  if len(callargs) == 1 or len(callargs) == 2:
+    port = int(callargs[0])
+    if len(callargs) == 2:
+      ip=str(callargs[1])
+    else:
+      try:
+        ip = getmyip()
+      except Exception, e:
+        print "Could not get an IP\n"
+        print (type(e), e)
+        raise
+  
+  # Fail if we don't have 1 or 2 arguments  
+  else:
+    raise Exception("Usage: python <path to repy.py> <path to restrictions.default> skeleton2016.repy <port> [ip (optional)]")
+
+  #Initialize Port and IP
+  mycontext['port'] = port
+  mycontext['ip'] = ip
+  
+  #read html template files
+  mycontext['entry_template'] = file("entry_template.html").read()
+  mycontext['boardcontents_template'] = file("boardcontents_template.html").read()
+  mycontext['frontpage_header_template'] = file("board_frontpage_header_template.html").read()
+  mycontext['frontpage_footer_template'] = file("board_frontpage_footer_template.html").read()
+
+  #mycontext['authors'] = "sample author"
+  mycontext['authors'] = "Mohamed El Mouctar Haidara & Francine Mäkelä"
+
+### My code
+  msg ='sample msg'
+  msg2 ='simple msg'
+  msgid = 0
+  #wlistHa = []
+  mycontext['entries'] = {}
+  #mycontext['entries'] = [listHa]
+
+  entry1 = mycontext['entry_template'] %('entries/%d' % (msgid), msgid, msg)
+  mycontext['entries'][msgid] = msg
+  mycontext['lastId'] = msgid + 1
+  mycontext['entries'][msgid + 1] = msg2
+  mycontext['lastId'] += 1
+  
+  #neighbourList = []
+  #mycontext['neighbours'] = neighbourList
+  #Read the neighbour file and save everyones address except for mine
+  #neighbourList = filter(remove_my_address, map(split_neighbour, file("neighborlist.txt").readlines()))
+  mycontext['neighbours'] = filter(remove_my_address, map(split_neighbour, file("neighboriplist.txt").readlines()))
+
+  #mycontext['entries'].append(tuple1)
+  #mycontext['entries'].append(tuple2)
+  #print (mycontext['entries'][msgid] == 0)
+    #mycontext['entries'][0] = "ko"
+    #print "haj: " + str(mycontext['entries'][0])
+  #mycontext['entries'][msgid] = tuple1
+  #mycontext['entries'][msgid + 1] = tuple2
+  ### end My code
+
+  # e = Exception("ex");
+  # try:
+  #   print "%s, %s\n" %(type(e), e)
+  # except Exception, ee:
+  #   print ee
+
+  start_board()
