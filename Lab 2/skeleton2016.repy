@@ -1,0 +1,476 @@
+# FEEL FREE TO CHANGE THE CODE. 
+# This is just a dull example
+
+# ------------------------------------------------------------------------------   
+# Start listening and handle incoming connections in board() function
+# ------------------------------------------------------------------------------   
+def start_board():
+  ip = mycontext['ip']
+  port = mycontext['port']
+
+  print "Listening on IP " + str(ip) +" port " + str(port)
+  try: 
+    listencommhandle = waitforconn(ip, port, board_connection_handler)
+  except Exception, e:
+    print "Exception in start_board: %s, %s\n" %(type(e), e)
+    raise
+    #pass
+
+# ------------------------------------------------------------------------------    
+# Called when an incoming message is received. 
+# --> Important starting point
+# ------------------------------------------------------------------------------    
+def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle):
+  print "In board_connection_handler"
+  try:
+    msgheader = sockobj.recv(1024) # Receive message
+    
+    print '****Request:\n%s' % msgheader
+    # React depending on message type: HTTP GET or POST, or some other type of communication.
+    if msgheader.startswith( 'GET' ):
+      get_board_handler(msgheader, sockobj, thiscommhandle)
+    elif msgheader.startswith( 'POST' ):
+      post_requests_handler(msgheader, sockobj, thiscommhandle)
+    else:
+      #recv_from_neighbour(msgheader, thiscommhandle)
+      other_requests_handler(msgheader, sockobj, thiscommhandle)
+
+
+  except Exception, e:
+    print "Exception in board: %s, %s\n" %(type(e), e)
+    #raise
+
+# ------------------------------------------------------------------------------
+# Handles initial GET request from browser, outputs HTML string and closes socket.
+# ------------------------------------------------------------------------------
+def get_board_handler(msgheader, sockobj, thiscommhandle):
+  htmlresponse = generate_html_page()
+  res=make_http_response(200, 'OK', htmlresponse)
+  sockobj.send(res)
+  stopcomm(thiscommhandle) 
+
+# ------------------------------------------------------------------------------
+# Handles initial GET request from browser, outputs HTML string and closes socket.
+# ------------------------------------------------------------------------------
+def post_requests_handler(msgheader, sockobj, thiscommhandle):
+  # extract the query from the HTTP request  
+  query = extract_http_request_contents(msgheader)
+  print query
+  # extract the query parameters
+  parameters = extract_parameters_from_query(query)
+  print parameters
+  print parameters['entry']
+
+
+  print "Plx work…"
+###My code
+#If true, the button "Submit to board" was pressed, and we should add a new entry
+  if parameters.get('delete') == None:
+    print "No "'delete'" entry exists"
+    mycontext['entries'][mycontext['lastId']] = parameters['entry']
+
+    send_to_neighbour(mycontext['lastId'], parameters['entry'], 'add')
+
+    mycontext['lastId'] += 1
+
+    #generate_html_page() <-- Should I have this?
+  else: #Else we should either remove or modify an entry
+
+    idToChange = int(parameters['id'])
+
+    if parameters['delete'] == "0":
+      #print "Hey, I wanna modefiy something! :D"
+      mycontext['entries'][idToChange] = parameters['entry']
+
+      send_to_neighbour(idToChange, parameters['entry'], 'modify')
+
+    elif parameters['delete'] == "1":
+      #print "Time to delete some stuffs! XD"
+      try:
+        hej = mycontext['entries'].pop(idToChange) #Save the entry in case we need it in the future
+        send_to_neighbour(idToChange, parameters['entry'], 'delete')
+      except Exception, e:
+        print "Failed to remove entry, nothing should happen"
+    else:
+      print "Oh, dat wasn't very smart… ;)" + str(parameters['delete'])
+      print "The value for 'delete' is not defined"
+### end My code
+
+  
+  # Do not mix HTML code with the server code as done here. This is a bad practice
+  template='<html><head><style>.status {color: red;font-size: 75%%;}</style></head><body><pre><samp class="status">%s</samp></pre></body><html>'
+  htmlresponse = template % ("404 Not Found\n" + msgheader)
+  res=make_http_response(404, 'Not Found', htmlresponse)
+  sockobj.send(res)
+  stopcomm(thiscommhandle) 
+
+# ------------------------------------------------------------------------------
+# Wrap into HTTP headers
+# ------------------------------------------------------------------------------
+def make_http_response(status, status_text, htmlresponse):
+
+    response_template = "HTTP/1.1 %d %s\r\nContent-type: text/html\r\nContent-length: %i\r\n\r\n%s"
+    return response_template % (status, status_text, len(htmlresponse), htmlresponse)
+
+# ------------------------------------------------------------------------------
+# Utility function to extract the contents (payload) from HTTP request
+# ------------------------------------------------------------------------------
+def extract_http_request_contents(header):
+  # find content length
+  conent_length = header.split('Content-Length: ')[1]
+  conent_length = int(conent_length.split('\r\n')[0])
+  
+  # extract the http response body and discard the header
+  contetns = header[-conent_length:]
+  return contetns
+
+# ------------------------------------------------------------------------------
+# Utility function to extract query parameter from HTML query
+# ------------------------------------------------------------------------------
+def extract_parameters_from_query(msg):
+  # extract the query parameters as a dictionary: {name:value}
+  # example input format: comment=aa&ip=127.0.0.1&port=63101&action=Delete
+  parameters={}
+  arr = msg.split('&')
+  for a in arr:
+    pp = a.split('=')
+    if len(pp)>1:
+      parameters[pp[0]] = pp[1]
+  return parameters
+
+# ------------------------------------------------------------------------------
+# Outputs the blackboard html 
+# ------------------------------------------------------------------------------   
+def generate_html_page():
+  #Initialize blackboard content
+  entries = ""
+
+  entriesToLoop = mycontext['entries']
+  for val in entriesToLoop:
+
+    newEntry = mycontext['entry_template'] %(val, val, entriesToLoop[val])
+    entries += newEntry
+
+
+  # dynamic title showing Ip address, port and up time. 
+  title='Sample board @ %s:%d. Up time: %d' %( str(mycontext['ip']), mycontext['port'], int(getruntime()) )
+  content = mycontext['boardcontents_template'] %( title, entries )
+  fullpage_h = mycontext['frontpage_header_template'] + content
+  fullpage = fullpage_h + mycontext['frontpage_footer_template'] % mycontext['authors']
+  #print entries, content, fullpage
+  return fullpage
+
+# ------------------------------------------------------------------------------    
+# Finds and returns the previous neighbour in order to create a virtual ring of the system.
+# ------------------------------------------------------------------------------  
+def create_virtual_ring():
+  #neighbour_list = map(split_neighbour, file("neighboriplist.txt").readlines())
+  
+  my_ip = mycontext['ip']
+  count = 0
+  prev_neighbour_ip = 0
+  prev_neighbour_port = 0
+
+  #for ip_port_tuple in neighbour_list:
+  for ip_port_tuple in map(split_neighbour, file("neighboriplist.txt").readlines()):
+
+    tmp_ip = ip_port_tuple[0]
+    tmp_port = ip_port_tuple[1]
+    print tmp_ip
+
+    if tmp_ip == my_ip:
+      if count != 0:
+        print "Hey, that's my IP, the previous neighbour will be my best friend! :D <3"
+        break   #Don have to search for a firend anymore
+      
+    #I am the first vessel in the list, my neighbour should be the last guy, i.e. keep looping
+    prev_neighbour_ip = tmp_ip
+    prev_neighbour_port = tmp_port
+    count += 1
+
+  print "My IP: %d\n My ring_neighbour:%d\n" %(mycontext['ip'], mycontext['ring_neighbour_ip'])
+  return (prev_neighbour_ip, prev_neighbour_port)
+
+
+# ------------------------------------------------------------------------------    
+# Handels all TCP connections
+# ------------------------------------------------------------------------------  
+def other_requests_handler(msgheader, sockobj, thiscommhandle):
+  print "In other_requests_handler"
+
+  if coordinate_message in msgheader: #We received a coordinate_message
+    handel_coordination_message()
+    print "coordinate_message in msgheader"
+  else:
+    print "Not a coordinate_message"
+  '''
+  [message_id, message, action] = msgheader.split("|")
+
+  if action == 'add':
+    print "Adding new entry"    
+    print "mycontext['entries']: " + str(mycontext['entries'])
+
+    mycontext['entries'][int(message_id)] = message
+
+    if mycontext['lastId'] < int(message_id):
+      mycontext['lastId'] = int(message_id) + 1
+
+  elif action == 'delete':
+    print action
+    mycontext['entries'].pop(int(message_id))
+  else: #Modify
+    print "else action: " + action
+    mycontext['entries'][int(message_id)] = message
+    print mycontext['entries']
+  print "After lunch"
+  '''
+
+  stopcomm(thiscommhandle) 
+
+
+
+# ------------------------------------------------------------------------------    
+# Finds and returns the previous neighbour in order to create a virtual ring of the system.
+# ------------------------------------------------------------------------------  
+def init_election():
+  print "In init_election()"
+  #Always randomize a new local ID to avoid getiting stuck with to leaders with the same ID
+  #mycontext['my_id'] = randomfloat()
+
+  to_send = "leader_election|%d:%s" %((float)(mycontext['my_id']), mycontext['ip'])
+
+  send_to_ring_neighbour(to_send)
+
+# ------------------------------------------------------------------------------    
+# Finds and returns the previous neighbour in order to create a virtual ring of the system.
+# ------------------------------------------------------------------------------  
+def parsipate_in_election(message_received):
+  print "In parsipate_in_election()"
+  my_ip = mycontext['ip']
+  my_port = mycontext['port']
+  #If my IP is in the message I was the one who init this election and should now find the leader
+  #and tell everyone who it is
+  if my_ip in message_received:
+    find_leader(message_received)
+    coordinate_message = 'coordinate_message|source=%s:%d|leader=%s:%d' %(my_ip, my_port, mycontext['leader'][0], mycontext['leader'][1])
+    send_to_ring_neighbour(coordinate_message)
+  else:
+    #Always randomize a new local ID to avoid getiting stuck with to leaders with the same ID
+    #mycontext['my_id'] = randomfloat()
+    to_send = message_received + "|%d:%s" %((float)(mycontext['my_id']), my_ip)
+    send_to_ring_neighbour(to_send)
+# ------------------------------------------------------------------------------
+# Sends HTTP to every neighbour
+# ------------------------------------------------------------------------------
+def send_to_ring_neighbour(message_to_send):
+  neighbour_tuple = mycontext['ring_neighbour_ip']
+  try:
+    sock = openconn(neighbour_tuple[1], neighbour_tuple[0])
+    sock.send(message_to_send)
+  except Exception, e:
+    print "Failed to send to neighbour"
+  else:
+    sock.close()
+  return
+
+
+# ------------------------------------------------------------------------------    
+# Finds the vessel with the lowest local ID, i.e. the one who should be choosen as leader.
+# ------------------------------------------------------------------------------  
+def find_leader(message_received):
+  print "In find_leader"
+  #neighbour_id_ip_tuple = map(split_neighbour_tripple_tuple, (message_received[len('leader_election'):].strip("|")).split("|", 2))
+  
+  tmp_message_list = (message_received[len('leader_election'):].strip("|")).split("|", 2)
+  neighbour_id_ip_port_tuple = map(split_neighbour_triple_tuple, tmp_message_list)
+  neighbour_id_ip_port_tuple.sort()
+
+  print "mycontext['leader'] BEFORE: " + str(mycontext['leader'])
+  for n in neighbour_id_ip_port_tuple:
+    mycontext['leader'] = (n[1], n[2])
+    break
+  print "mycontext['leader'] AFTER: " + str(mycontext['leader'])
+
+# ------------------------------------------------------------------------------    
+# Handels the event of receiving a TCP message containting who is the leader.
+# ------------------------------------------------------------------------------  
+def handel_coordination_message(message_received):
+  print "In handel_coordination_message()"
+  #coordinate_message = 'coordinate_message|source=%s:%d|leader=%s:%d' %(my_ip, my_port, mycontext['leader'][0], mycontext['leader'][1])
+
+  tmp_string = "source=%s:%d" %(mycontext['ip'], mycontext['port'])
+  
+  print "tmp_string: " + tmp_string
+  print "message_received: " + str(message_received)
+  #Save the leader and forward the message
+  if tmp_string not in message_received:
+
+    [coordinate_message_header, source, leader] = message_received.split("|")
+    #leader = split_neighbour(leader[len('leader='):])
+    mycontext['leader'] = split_neighbour(leader[len('leader='):])
+    print "leader :D : " + str(mycontext['leader'])
+    
+    print "I' not in the message"
+  else:
+    #Else I am the source, i.e. I sent who is the neighbour and now that message has circulate one round
+    #in the ring. This means that everyone have seen it and I shouldn't forward the message.
+
+  
+
+# ------------------------------------------------------------------------------    
+# Separates the IP address and the port number for a given neighbour
+# ------------------------------------------------------------------------------  
+def split_neighbour_triple_tuple(neighbour):
+  n = neighbour.split(":")
+  n[0] = float(n[0])
+  n[2] = int(n[2])
+  return tuple(n)
+
+# ------------------------------------------------------------------------------    
+# Separates the IP address and the port number for a given neighbour
+# ------------------------------------------------------------------------------  
+def split_neighbour(neighbour):
+  n = neighbour.split(":")
+  n[1] = int(n[1])
+  return tuple(n)
+
+# ------------------------------------------------------------------------------    
+# Removes me for the list of neighbours
+# ------------------------------------------------------------------------------  
+def remove_my_address(neighbour_tuple):
+    if (neighbour_tuple[0] == mycontext['ip']) and (neighbour_tuple[1] == mycontext['port']):
+      return
+    return neighbour_tuple
+
+# ------------------------------------------------------------------------------
+# Sends HTTP to every neighbour
+# ------------------------------------------------------------------------------
+def send_to_neighbour(entry_id, entry_message, action):
+
+  print "neighbours: " + str(mycontext['neighbours'])
+  for (ip, port) in mycontext['neighbours']:
+
+    try:
+      sock = openconn(ip, port)
+      sock.send("%d|%s|%s" % (int(entry_id), entry_message, action))
+    except Exception, e:
+      print "Failed to send to neighbour"
+    else:
+      sock.close()
+
+# ------------------------------------------------------------------------------
+# Receive for neighbour
+# ------------------------------------------------------------------------------
+def recv_from_neighbour(msgheader, thiscommhandle):
+  
+  print "In recv_from_neighbour"
+  [message_id, message, action] = msgheader.split("|")
+
+  print "I received something! :D"
+  print "id: " + str(message_id)
+  print "message: " + message
+  print "action: " + action
+
+  if action == 'add':
+    print "Adding new entry"    
+    print "mycontext['entries']: " + str(mycontext['entries'])
+
+    mycontext['entries'][int(message_id)] = message
+
+    if mycontext['lastId'] < int(message_id):
+      mycontext['lastId'] = int(message_id) + 1
+
+    print "mycontext['entries']: " + str(mycontext['entries'])
+
+    print "Lunch time? :D"
+
+  elif action == 'delete':
+    print action
+    mycontext['entries'].pop(int(message_id))
+  else: #Modify
+    print "else action: " + action
+    mycontext['entries'][int(message_id)] = message
+    print mycontext['entries']
+  print "After lunch"
+
+  #print "msgheader: " + str(msgheader)
+
+  stopcomm(thiscommhandle)
+
+
+# ------------------------------------------------------------------------------    
+# Main entry point of the program. Initalizes global variables in mycontext
+# and calls start_board() which opens a socket for incoming connections.
+# ------------------------------------------------------------------------------
+if callfunc == 'initialize':
+  # whenever this vessel gets a connection on its IP:port it'll call function board_connection_handler
+  if len(callargs) == 1 or len(callargs) == 2:
+    port = int(callargs[0])
+    if len(callargs) == 2:
+      ip=str(callargs[1])
+    else:
+      try:
+        ip = getmyip()
+      except Exception, e:
+        print "Could not get an IP\n"
+        print (type(e), e)
+        raise
+  
+  # Fail if we don't have 1 or 2 arguments  
+  else:
+    raise Exception("Usage: python <path to repy.py> <path to restrictions.default> skeleton2016.repy <port> [ip (optional)]")
+
+  #Initialize Port and IP
+  mycontext['port'] = port
+  mycontext['ip'] = ip
+  
+  #read html template files
+  mycontext['entry_template'] = file("entry_template.html").read()
+  mycontext['boardcontents_template'] = file("boardcontents_template.html").read()
+  mycontext['frontpage_header_template'] = file("board_frontpage_header_template.html").read()
+  mycontext['frontpage_footer_template'] = file("board_frontpage_footer_template.html").read()
+
+  #mycontext['authors'] = "sample author"
+  mycontext['authors'] = "Mohamed El Mouctar Haidara & Francine Mäkelä"
+
+### My code
+  msg ='sample msg'
+  msg2 ='simple msg'
+  msgid = 0
+  mycontext['entries'] = {}
+
+  entry1 = mycontext['entry_template'] %('entries/%d' % (msgid), msgid, msg)
+  mycontext['entries'][msgid] = msg
+  mycontext['lastId'] = msgid + 1
+  mycontext['entries'][msgid + 1] = msg2
+  mycontext['lastId'] += 1
+  mycontext['my_id'] = 0 #Local ID is init to zero
+
+###Tmp
+  mycontext['my_id'] = randomfloat()
+### Things used for leader election
+  mycontext['ring_neighbour_ip'] = create_virtual_ring() #Contains a (ip, port) tuple for the neighbour to send to
+  print 'My ID: %s and my friend is %s' %(mycontext['ip'], mycontext['ring_neighbour_ip'])
+  mycontext['leader'] = () #Dictionary to be use for storing the local ID and IP of the leader
+
+  #tmpstring = 'leader_election|%f:%s:%d|%f:%s:%d|%f:%s:%d' %(0.5, '195.113.161.84', 63163, 0.49, '10.0.160.34', 12345, 0.05, '219.243.208.60', 63163)
+  #print "find_leader(tmpstring)" + str(find_leader(tmpstring))
+  #print "mycontext['ring_neighbour_ip']: " + str(mycontext['ring_neighbour_ip'][0]) + ' '+ str(mycontext['ring_neighbour_ip'][1])
+  
+  #coordinate_message = 'coordinate_message|source=%s:%d|leader=%s:%d' %(ip, port, '219.243.208.60', 63163)
+  #print "handel_coordination_message:"
+  #handel_coordination_message(coordinate_message)
+  #print "hej mu :D"
+  
+  #Read the neighbour file and save everyones address except for mine
+  mycontext['neighbours'] = filter(remove_my_address, map(split_neighbour, file("neighboriplist.txt").readlines()))
+
+  ### end My code
+
+  # e = Exception("ex");
+  # try:
+  #   print "%s, %s\n" %(type(e), e)
+  # except Exception, ee:
+  #   print ee
+
+  start_board()
