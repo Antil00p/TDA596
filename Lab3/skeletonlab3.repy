@@ -1,0 +1,712 @@
+# FEEL FREE TO CHANGE THE CODE. 
+# This is just a dull example
+
+# ------------------------------------------------------------------------------   
+# Start listening and handle incoming connections in board() function
+# ------------------------------------------------------------------------------   
+def start_board():
+  ip = mycontext['ip']
+  port = mycontext['port']
+
+  print "Listening on IP " + str(ip) +" port " + str(port)
+  try: 
+    print "Men tjenare! :D"
+    listencommhandle = waitforconn(ip, port, board_connection_handler)
+  except Exception, e:
+    print "Exception in start_board: %s, %s\n" %(type(e), e)
+    raise
+    #pass
+
+# ------------------------------------------------------------------------------    
+# Called when an incoming message is received. 
+# --> Important starting point
+# ------------------------------------------------------------------------------    
+def board_connection_handler(ip, port, sockobj, thiscommhandle, listencommhandle):
+
+  try:
+
+    msgheader = sockobj.recv(1024) # Receive message
+    
+    print '****Request:\n%s' % (msgheader)
+    # React depending on message type: HTTP GET or POST, or some other type of communication.
+    if msgheader.startswith( 'GET' ):
+      get_board_handler(msgheader, sockobj, thiscommhandle)
+    elif msgheader.startswith( 'POST' ):
+      print "A POST it was"
+      other_requests_handler(msgheader, sockobj, thiscommhandle)
+    else:
+      print "Receiving from neighbour"
+      recv_from_neighbour(msgheader, thiscommhandle)
+
+  except Exception, e:
+    print "Exception in board: %s, %s\n" %(type(e), e)
+    #raise
+
+# ------------------------------------------------------------------------------
+# Handles initial GET request from browser, outputs HTML string and closes socket.
+# ------------------------------------------------------------------------------
+def get_board_handler(msgheader, sockobj, thiscommhandle):
+  print "In get_board_handler()"
+  htmlresponse = generate_html_page()
+  res=make_http_response(200, 'OK', htmlresponse)
+  sockobj.send(res)
+  stopcomm(thiscommhandle) 
+
+# ------------------------------------------------------------------------------
+# Handles initial GET request from browser, outputs HTML string and closes socket.
+# ------------------------------------------------------------------------------
+def other_requests_handler(msgheader, sockobj, thiscommhandle):
+  # extract the query from the HTTP request  
+
+  query = extract_http_request_contents(msgheader)
+  try:
+    print query
+  except:
+    print "Oh-no, there seems like there is no entry to read"
+  # extract the query parameters
+  parameters = extract_parameters_from_query(query)
+  print parameters
+  print parameters['entry']
+  
+  ''' Not needed
+  try:
+    print "parameters['source_ip']: " + str(parameters['source_ip'])
+  except:
+    print "No source IP exsists"
+  '''
+
+#If true, the button "Submit to board" was pressed, and we should add a new entry
+  if parameters.get('delete') == None:
+    print "Adding an entry"
+
+
+    tuple_to_add = (mycontext['ip'], parameters['entry'])
+    
+    print "tuple_to_add: " + str(tuple_to_add)
+    
+    mycontext['lock'].acquire()
+    print "Lock acquired"
+    msg_id = mycontext['lastId']
+    #If we added an new entry, the new max ID must of course be increased. It is done directly in order to
+    #avoid the scenario where one single client post two events really fast upon each other so that the
+    #events will have the same ID.
+    mycontext['lastId'] += 1
+    mycontext['lock'].release()
+    print "Lock released"
+
+    #If the tuple that should be added to the dictionary is greater than the largest element with
+    #the same ID, it should be added last, else we have to loop through the list of elements with
+    #the same ID to find the right place. (memo: a list in Python will keep its order, i.e. no need
+    #to rearrange it before showing it in the browser)
+    mycontext['lock'].acquire()
+    print "Lock acquired 2"
+    if msg_id not in mycontext['entries']: 
+      mycontext['entries'][msg_id] = [tuple_to_add]
+      print "appending: " + str(tuple_to_add)
+    else:
+      tmp_list = mycontext['entries'][msg_id]
+      max_index = len(tmp_list) - 1 #Minus one to get the greatest index of the list rather than
+                                    #the size of the list (since indexing start at zero)
+      if tuple_to_add >= tmp_list[max_index]:
+        tmp_list.append(tuple_to_add)
+        print "appending: " + str(tuple_to_add)
+      else:
+        for count in range(0, max_index + 1):
+          #if (tuple_to_add < entry_0[count]):
+          if (tuple_to_add < mycontext['entries'][msg_id][count]):
+            tmp_list.insert(count, tuple_to_add)
+    mycontext['lock'].release()
+    print "Lock released 2"
+
+ 
+    #mycontext['entries'][mycontext['lastId']] = (mycontext['ip'], parameters['entry'])
+
+
+    #send_to_neighbour(mycontext['lastId'], parameters['entry'], 'add')
+    send_to_neighbours(mycontext['ip'], msg_id, parameters['entry'], 'add', 0)
+
+    #If we added an new entry, the new max ID must of course be increased
+    #mycontext['lastId'] += 1
+
+  else: #Else we should either remove or modify an entry
+
+    print "tuple_to_add: " + str(parameters['id'])
+
+    idToChange = int(parameters['id'])
+
+    if parameters['delete'] == "0":
+      '''
+      #print "Hey, I wanna modefiy something! :D"
+      mycontext['entries'][idToChange] = parameters['entry']
+
+      #send_to_neighbour(idToChange, parameters['entry'], 'modify')
+      '''
+      #send_to_neighbours(parameters['source_ip'], idToChange, parameters['entry'], 'modify', 0)
+
+      ##Lab3 trying
+      mycontext['lock'].acquire()
+      for item in mycontext['entries'][idToChange]:
+          print "Item " + str(item)
+
+          if item[0] == parameters['source_ip']:
+
+            to_change_index = mycontext['entries'][idToChange].index(item)
+
+            #Try to modify the value of the message, it might already have been deleted
+            #(received delete before modify)
+            try:
+              #mycontext['entries'][idToChange][to_change_index] = (mycontext['ip'], parameters['entry'])
+              mycontext['entries'][idToChange][to_change_index] = (parameters['source_ip'], parameters['entry'])
+            except:
+              add_to_event_queue()
+              print "Failed to modify entry on my own board"
+            else:
+              send_to_neighbours(parameters['source_ip'], idToChange, parameters['entry'], 'modify', 0)
+              break #No need to keep looking after modifying the entry
+      mycontext['lock'].release()
+
+
+    elif parameters['delete'] == "1":
+
+      mycontext['lock'].acquire()
+      for item in mycontext['entries'][idToChange]:
+          print "Item " + str(item)
+
+          if item[0] == parameters['source_ip']:
+
+            #print "item[0] == parameters['source_ip']: " + str(item[0] == parameters['source_ip'])
+
+            to_remove_index = mycontext['entries'][idToChange].index(item)
+
+            #Try to delete the entry, it might already have been deleted
+            #(two vessels wants to delete the same entry)
+            try:
+              del mycontext['entries'][idToChange][to_remove_index]
+              print "Deleting item with source IP %s and message %s" %(item[0], item[1])
+            except:
+              add_to_event_queue()
+              print "Failed to delete entry on my own board"
+            else:
+              send_to_neighbours(parameters['source_ip'], idToChange, parameters['entry'], 'delete', 0)
+              break #No need to keep looking after removing the entry
+      mycontext['lock'].release()
+      #print "Time to delete some stuffs! XD"
+
+      '''
+      try:
+
+        #hej = mycontext['entries'].pop(idToChange) #Save the entry in case we need it in the future
+
+        for item in mycontext['entries'][idToChange]:
+          print "Item " + str(item)
+          #print item[0]
+          #print item[1]
+          #print str(parameters['source_ip'])
+          
+
+          if item[0] == parameters['source_ip']:
+            print mycontext['entries'][idToChange]
+            print ":D"
+            print "item == parameters['source_ip']: " + str(item[0] == parameters['source_ip'])
+            print str(mycontext['entries'][idToChange]) + '\n'
+
+            tmp_hej = (item[0], item[1])
+            print "tmp_hej: " + str(tmp_hej)
+
+            to_remove_index = mycontext['entries'][idToChange].index(tmp_hej)
+
+            print "to_remove_index: " + to_remove_index
+
+            try:
+              del mycontext['entries'][idToChange][to_remove_index]
+              print "to_remove_index: " + to_remove_index
+            except:
+              print "SUPER-MEGA-HYPER-FAIL"
+          break #No need to keep looking after removing the entry
+          
+        #print "Removing: " + str(hej)
+        #send_to_neighbour(idToChange, parameters['entry'], 'delete')
+        send_to_neighbours(idToChange, parameters['entry'], 'delete', 0)
+      except Exception, e:
+        print "Failed to remove entry" #Nothing should happen
+      '''
+    else:
+      print "The value for 'delete' is not defined"
+      #Should never end up here
+
+  
+  # Do not mix HTML code with the server code as done here. This is a bad practice
+  template='<html><head><style>.status {color: red;font-size: 75%%;}</style></head><body><pre><samp class="status">%s</samp></pre></body><html>'
+  htmlresponse = template % ("404 Not Found\n" + msgheader)
+  res=make_http_response(404, 'Not Found', htmlresponse)
+  sockobj.send(res)
+  stopcomm(thiscommhandle) 
+
+# ------------------------------------------------------------------------------
+# Wrap into HTTP headers
+# ------------------------------------------------------------------------------
+def make_http_response(status, status_text, htmlresponse):
+
+    response_template = "HTTP/1.1 %d %s\r\nContent-type: text/html\r\nContent-length: %i\r\n\r\n%s"
+    return response_template % (status, status_text, len(htmlresponse), htmlresponse)
+
+# ------------------------------------------------------------------------------
+# Utility function to extract the contents (payload) from HTTP request
+# ------------------------------------------------------------------------------
+def extract_http_request_contents(header):
+  # find content length
+  conent_length = header.split('Content-Length: ')[1]
+  conent_length = int(conent_length.split('\r\n')[0])
+  
+  # extract the http response body and discard the header
+  contetns = header[-conent_length:]
+  return contetns
+
+# ------------------------------------------------------------------------------
+# Utility function to extract query parameter from HTML query
+# ------------------------------------------------------------------------------
+def extract_parameters_from_query(msg):
+  # extract the query parameters as a dictionary: {name:value}
+  # example input format: comment=aa&ip=127.0.0.1&port=63101&action=Delete
+  parameters={}
+  arr = msg.split('&')
+  for a in arr:
+    pp = a.split('=')
+    if len(pp)>1:
+      parameters[pp[0]] = pp[1]
+  return parameters
+
+# ------------------------------------------------------------------------------
+# Outputs the blackboard html 
+# ------------------------------------------------------------------------------   
+def generate_html_page():
+  #Initialize blackboard content
+  print "In generate_html_page()"
+  entries = ""
+
+  #Loop through all the (ID, message) pairs and adds them ordered after their ID.
+  #This is to make sure that the entrie are in the same order on all blackboards.
+  #print "generate_html_page() : before for"
+  #mycontext['lock'].acquire()
+  count_to = mycontext['lastId'] + 1
+  tmp_dict = mycontext['entries']
+  #for index in range(0, (mycontext['lastId'] + 1)):
+  for index in range(0, (count_to)):
+    print "generate_html_page() : for"
+    #if index in mycontext['entries']:
+    if index in tmp_dict:
+      print "generate_html_page() : for -> if"
+      #for element in mycontext['entries'][index]:
+      for element in tmp_dict[index]:
+
+        print "element: " + str(element)
+        
+        newEntry = mycontext['entry_template'] %(index, index, element[1], element[0])
+                                                  #ID, shown ID, message,  source_IP
+        entries += newEntry
+  #mycontext['lock'].release()
+
+
+  # dynamic title showing Ip address, port and up time. 
+  title='Sample board @ %s:%d. Up time: %d' %( str(mycontext['ip']), mycontext['port'], int(getruntime()) )
+  content = mycontext['boardcontents_template'] %( title, entries )
+  fullpage_h = mycontext['frontpage_header_template'] + content
+  fullpage = fullpage_h + mycontext['frontpage_footer_template'] % mycontext['authors']
+  #print entries, content, fullpage
+  return fullpage
+
+
+# ------------------------------------------------------------------------------    
+# Separates the IP address and the port number for a given neighbour
+# ------------------------------------------------------------------------------  
+def split_neighbour(neighbour):
+  n = neighbour.split(":")
+  n[1] = int(n[1])
+  return tuple(n)
+
+# ------------------------------------------------------------------------------    
+# Removes me for the list of neighbours, because there is no point for me to
+# send to myself.
+# ------------------------------------------------------------------------------  
+def remove_my_address(neighbour_tuple):
+    if (neighbour_tuple[0] == mycontext['ip']) and (neighbour_tuple[1] == mycontext['port']):
+      return
+    return neighbour_tuple
+
+# ------------------------------------------------------------------------------
+# Sends TCP to ALL neighbours
+# ------------------------------------------------------------------------------
+def send_to_neighbour(entry_id, entry_message, action):
+  print "neighbours: " + str(mycontext['neighbours'])
+
+  my_ip = mycontext['ip']
+
+  for (ip, port) in mycontext['neighbours']:
+
+    try:
+      sock = openconn(ip, port)
+      sock.send("%s|%d|%s|%s" % (my_ip, int(entry_id), entry_message, action))
+    except Exception, e:
+      print "Failed to send to neighbour"
+    else:
+      sock.close()
+
+
+# ------------------------------------------------------------------------------
+# Sends TCP to all neighbours.
+# Tries to resend 10 times on failure by recursive call to itself.
+# ------------------------------------------------------------------------------
+def send_to_neighbours(msg_source_ip, entry_id, entry_message, action, nbr_of_tries):
+  print "send_to_neighbours with tries (disabled for now)"
+  #print "entry_message: " + str(entry_message)
+  print "neighbours: " + str(mycontext['neighbours'])
+
+  #my_ip = mycontext['ip']
+
+  for (ip, port) in mycontext['neighbours']:
+    try:
+      #sock = openconn(neighbour_tuple[0], neighbour_tuple[1])
+      #sock.send(message_to_send)
+      sock = openconn(ip, port)
+      sock.send("%s|%d|%s|%s" % (msg_source_ip, int(entry_id), entry_message, action))
+    except Exception, e:
+      print "Exception: " + str(nbr_of_tries)
+      if nbr_of_tries < 10:
+        print "Try to resend"
+        #send_to_neighbours(msg_source_ip, int(entry_id), entry_message, action, nbr_of_tries + 1)
+
+      print "Failed to send to neighbour: %s:%d" %(ip, port)
+
+    else:
+      sock.close()
+
+
+# ------------------------------------------------------------------------------
+# Receive from neighbour
+# ------------------------------------------------------------------------------
+def recv_from_neighbour(msgheader, thiscommhandle):
+  print "In recv_from_neighbour"
+  print "msgheader: " + str(msgheader)
+  #[message_id, message, action] = msgheader.split("|")
+  [msg_source_ip, message_id, message, action] = msgheader.split("|")
+
+  msg_id = int(message_id)
+
+  if action == 'add':
+    print "Adding new entry"
+
+    '''
+    if mycontext['lastId'] < int(message_id):
+      mycontext['lastId'] = int(message_id)
+    '''
+    tmp_last_id = mycontext['lastId']
+
+    print "tmp_last_id: " + str(tmp_last_id)
+
+    print "tmp_last_id < msg_id: " + str(tmp_last_id < msg_id)
+
+    if tmp_last_id < msg_id:
+      print "tmp_last_id < msg_id: " + str(tmp_last_id < msg_id)
+      tmp_last_id = msg_id
+      print "tmp_last_id (in if): " + str(tmp_last_id)
+    #If we added an new entry, the new max ID must of course be increased. It is done directly in order to
+    #avoid the scenario where one single client post two events really fast upon each other so that the
+    #events will have the same ID.
+    #mycontext['lock'].acquire()
+    print "mycontext['lastId'] (after acqurie): " + str(mycontext['lastId'])
+    mycontext['lastId'] += 1
+    print "mycontext['lastId'] (before release): " + str(mycontext['lastId'])
+    #mycontext['lock'].release()
+
+
+    
+    tuple_to_add = (msg_source_ip, message)
+
+    print "tuple_to_add: " + str(tuple_to_add) + '  ' + str(msg_source_ip)
+
+    '''
+    msg_id = int(message_id)
+    #If we added an new entry, the new max ID must of course be increased. It is done directly in order to
+    #avoid the scenario where one single client post two events really fast upon each other so that the
+    #events will have the same ID.
+    mycontext['lastId'] += 1
+    '''
+
+    #If the tuple that should be added to the dictionary is greater than the largest element with
+    #the same ID, it should be added last, else we have to loop through the list of elements with
+    #the same ID to find the right place. (memo: a list in Python will keep its order, i.e. no need
+    #to rearrange it before showing it in the browser)
+    mycontext['lock'].acquire()
+    print "Lock acquire (recv)"
+    if msg_id not in mycontext['entries']: 
+      mycontext['entries'][msg_id] = [tuple_to_add]
+      print "appending: " + str(tuple_to_add)
+    else:
+      print "In else"
+      max_index = len(mycontext['entries'][msg_id]) - 1 #Minus one to get the greatest index of the list rather than
+                                    #the size of the list (since indexing start at zero)
+      if tuple_to_add >= mycontext['entries'][msg_id][max_index]:
+        print "In else -> if"
+        mycontext['entries'][msg_id].append(tuple_to_add)
+        print "appending: " + str(tuple_to_add)
+      else:
+        print "In else -> else"
+        for count in range(0, max_index + 1):
+          print "In else -> else: %d" %(count)
+          if (tuple_to_add < mycontext['entries'][msg_id][count]):
+            print "In else -> else -> if"
+            mycontext['entries'][msg_id].insert(count, tuple_to_add)
+          else:
+            print "In else -> else -> else"
+            pass
+    mycontext['lock'].release()
+    print "Lock released (recv)"
+    '''
+    tmp_list = mycontext['entries'][msg_id]
+    max_index = len(tmp_list) - 1 #Minus one to get the greatest index of the list rather than
+                                  #the size of the list (since indexing start at zero)
+    if tuple_to_add >= tmp_list[max_index]:
+      print "In else -> if"
+      tmp_list.append(tuple_to_add)
+      print "appending: " + str(tuple_to_add)
+    else:
+      print "In else -> else"
+      for count in range(0, max_index + 1):
+        print "In else -> else: %d" %(count)
+        if (tuple_to_add < entry_0[count]):
+          print "In else -> else -> if"
+          tmp_list.insert(count, tuple_to_add)
+        else:
+          print "In else -> else -> else"
+          pass
+    '''
+      
+
+
+
+
+
+    #print "mycontext['entries']: " + str(mycontext['entries'])
+
+    #print "Lunch time? :D"
+
+  elif action == 'delete':
+    print "action: " + str(action)
+    #mycontext['entries'].pop(int(message_id))
+
+    print "mycontext['entries']: " + str(mycontext['entries'])
+    print "message_id: " + str(message_id)
+    print "mycontext['entries']: " + str(mycontext['entries'][0])
+
+    #tmp_list = mycontext['entries'][msg_id]
+
+    #print "tmp_list: " + str(tmp_list)
+
+    for item in mycontext['entries'][msg_id]:
+    #for item in tmp_list:
+      print "Item " + str(item)
+
+      #print "item[0]" + str(item[0])
+      #print "msg_source_ip: " + str(msg_source_ip)
+
+      if item[0] == msg_source_ip:
+
+        #print "item[0] == msg_source_ip: " + str(item[0] == msg_source_ip)
+
+        to_remove_index = mycontext['entries'][msg_id].index(item)
+
+        #print "to_remove_index: " + str(to_remove_index)
+        #print "mycontext['entries']: " + str(mycontext['entries'])
+
+        #Only for testing
+        '''
+        for key in mycontext['entries']:
+          print "Keys: " + str(key)
+        '''
+
+        #print "mycontext['entries'][message_id]: " + str(mycontext['entries'][msg_id])
+        
+
+        #Try to delete the entry, it might already have been deleted
+        #(two vessels wants to delete the same entry)
+        try:
+          '''
+          print "msg_id: " + str(msg_id)
+          print "In try to delete: " + str(mycontext['entries'][msg_id])
+          print "In try to delete: " + str(mycontext['entries'][msg_id][to_remove_index])
+          '''
+          del mycontext['entries'][msg_id][to_remove_index]
+          #print "Deleting item with source IP %s and message %s" %(item[0], item[1])
+
+
+
+          print "Deleting item with source IP %s and message %s" %(item[0], item[1])
+        except:
+          add_to_event_queue()
+          print "SUPER-MEGA-HYPER-FAIL"
+        else:
+          break #No need to keep looking after removing the entry
+
+  else: #Modify
+    #mycontext['entries'][int(message_id)] = message
+
+    ##Lab3 trying
+    for item in mycontext['entries'][msg_id]:
+        print "Item " + str(item)
+
+        if item[0] == msg_source_ip:
+
+          to_change_index = mycontext['entries'][msg_id].index(item)
+
+          #Try to modify the value of the message, it might already have been deleted
+          #(received delete before modify)
+          try:
+            #mycontext['entries'][idToChange][to_change_index] = (msg_source_ip, message)
+            mycontext['entries'][msg_id][to_change_index] = (msg_source_ip, message)
+          except:
+            add_to_event_queue()
+            print "Failed to modify entry"
+          else:
+            break #No need to keep looking after modifying the entry
+
+
+  stopcomm(thiscommhandle)
+
+
+# ------------------------------------------------------------------------------
+# If a event could not be handled the moment it arrivied, it is added to a
+# queue to handled later. This should happen in all cases where an message
+# which asks for deleting or modefying an entry is received before the message
+# has been added.
+# ------------------------------------------------------------------------------
+def add_to_event_queue(add_parameter, add_parameter2):
+  print "In add_to_event_queue()"
+
+
+# ------------------------------------------------------------------------------    
+# Main entry point of the program. Initalizes global variables in mycontext
+# and calls start_board() which opens a socket for incoming connections.
+# ------------------------------------------------------------------------------
+if callfunc == 'initialize':
+  # whenever this vessel gets a connection on its IP:port it'll call function board_connection_handler
+  if len(callargs) == 1 or len(callargs) == 2:
+    port = int(callargs[0])
+    if len(callargs) == 2:
+      ip=str(callargs[1])
+    else:
+      try:
+        ip = getmyip()
+      except Exception, e:
+        print "Could not get an IP\n"
+        print (type(e), e)
+        raise
+  
+  # Fail if we don't have 1 or 2 arguments  
+  else:
+    raise Exception("Usage: python <path to repy.py> <path to restrictions.default> skeleton2016.repy <port> [ip (optional)]")
+
+  #Initialize Port and IP
+  mycontext['port'] = port
+  mycontext['ip'] = ip
+  
+  #read html template files
+  mycontext['entry_template'] = file("entry_template.html").read()
+  mycontext['boardcontents_template'] = file("boardcontents_template.html").read()
+  mycontext['frontpage_header_template'] = file("board_frontpage_header_template.html").read()
+  mycontext['frontpage_footer_template'] = file("board_frontpage_footer_template.html").read()
+
+  #mycontext['authors'] = "sample author"
+  mycontext['authors'] = "Mohamed El Mouctar Haidara & Francine Mäkelä"
+
+### My code
+  msg ='sample msg'
+  msg2 ='simple msg'
+  msgid = 0
+  mycontext['entries'] = {}
+  mycontext['lock'] = getlock()
+  mycontext['lastId'] = 0   #"lastId" from lab1 is now used as sequence number
+
+  # = mycontext['entry_template'] %('entries/%d' % (msgid), msgid, msg)
+  test_ip = '100.5.0.1'
+  test_ip2 = '100.5.0.2' 
+
+
+  mycontext['entries'][0] = []
+  mycontext['entries'][0].append((test_ip, msg))
+
+  place_me_here = 0
+  max_index = len(mycontext['entries'][0]) - 1 #Minus one to get the greatest index of the list rather than
+                                                #the size of the list (since indexing start at zero)
+  entry_0 = mycontext['entries'][0]
+
+  #If the tuple that should be added to the dictionary is greater than the largest element with
+  #the same ID, it should be added last, else we have to loop through the list of elements with
+  #the same ID to find the right place. (observ that a list in Python keep its order, i.e. no need
+  #to rearrange it before show it in the browse)
+  tmp_tuple = ('58.0.0.1', 'Hej ^')
+
+  if tmp_tuple >= entry_0[max_index]:
+      #mycontext['entries'][0].insert(max_index + 1, tmp_tuple)
+      mycontext['entries'][0].append((tmp_tuple))
+      #print "appending: " + str(tmp_tuple)
+  else:
+    for count in range(0, max_index + 1):
+      if (tmp_tuple < entry_0[count]):
+        entry_0.insert(count, tmp_tuple)
+        #print "Inserting on index %d: %s" %(count, str(tmp_tuple))
+
+  #WORKING CODE FOR ADDING IN RIGHT PLACE OF LIST
+  max_index = len(mycontext['entries'][0]) - 1
+  
+  if (test_ip2, msg2) >= entry_0[max_index]:
+      #mycontext['entries'][0].insert(max_index + 1, (test_ip2, msg2))
+      mycontext['entries'][0].append((test_ip2, msg2))
+      #print "appending: " + str((test_ip2, msg2))
+  else:
+    for count in range(0, max_index + 1):
+      if ((test_ip2, msg2) < entry_0[count]):
+        entry_0.insert(count, (test_ip2, msg2))
+        #print "Inserting on index %d: %s" %(count, str((test_ip2, msg2)))
+    
+
+  mycontext['entries'][1] = []
+  mycontext['entries'][1].append(('2', '1'))
+
+  mycontext['lastId'] = 2
+
+##Example on how to add a new element in the dictionary
+  '''
+  for i in range(0, mycontext['lastId']):
+    if i not in mycontext['entries']:
+      print "In if with: " 
+      mycontext['entries'][i] = lista[i]
+      print "i: " + str(i)
+    else:
+      for element in lista:
+        mycontext['entries'][i].append(element)
+        print "i: " + str(i)
+  '''
+
+#mycontext['entries'][msgid] = msg
+#mycontext['lastId'] = msgid + 1
+#mycontext['entries'][msgid + 1] = msg2
+#mycontext['lastId'] += 1
+
+  
+  '''
+  for index in range(0, (mycontext['lastId'] + 1)):
+    if index in mycontext['entries']:
+      print "index is a key in the dictionary"
+      print "key: %d\tmessage: %s" %(index, mycontext['entries'][index])
+  '''
+
+  mycontext['neighbours'] = filter(remove_my_address, map(split_neighbour, file("neighboriplist.txt").readlines()))
+  ### end My code
+
+  # e = Exception("ex");
+  # try:
+  #   print "%s, %s\n" %(type(e), e)
+  # except Exception, ee:
+  #   print ee
+
+  start_board()
